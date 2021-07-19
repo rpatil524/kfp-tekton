@@ -30,6 +30,7 @@ import (
 	pipelineloopv1alpha1 "github.com/kubeflow/kfp-tekton/tekton-catalog/pipeline-loops/pkg/apis/pipelineloop/v1alpha1"
 	pipelineloopclientset "github.com/kubeflow/kfp-tekton/tekton-catalog/pipeline-loops/pkg/client/clientset/versioned"
 	listerspipelineloop "github.com/kubeflow/kfp-tekton/tekton-catalog/pipeline-loops/pkg/client/listers/pipelineloop/v1alpha1"
+	"github.com/tektoncd/pipeline/pkg/apis/config"
 	"github.com/tektoncd/pipeline/pkg/apis/pipeline"
 	"github.com/tektoncd/pipeline/pkg/apis/pipeline/v1alpha1"
 	"github.com/tektoncd/pipeline/pkg/apis/pipeline/v1beta1"
@@ -65,6 +66,9 @@ const (
 
 	// pipelineLoopIterationLabelKey is the label identifier for the iteration number.  This label is added to the Run's PipelineRuns.
 	pipelineLoopIterationLabelKey = "/pipelineLoopIteration"
+
+	// LabelKeyWorkflowRunId is the label identifier a pipelinerun is managed by the Kubeflow Pipeline persistent agent.
+	LabelKeyWorkflowRunId = "pipeline/runid"
 )
 
 // Reconciler implements controller.Reconciler for Configuration resources.
@@ -167,7 +171,24 @@ func (c *Reconciler) ReconcileKind(ctx context.Context, run *v1alpha1.Run) pkgre
 	return merr
 }
 
+func EnableCustomTaskFeatureFlag(ctx context.Context) context.Context {
+	defaults, _ := config.NewDefaultsFromMap(map[string]string{})
+	featureFlags, _ := config.NewFeatureFlagsFromMap(map[string]string{
+		"enable-custom-tasks": "true",
+	})
+	artifactBucket, _ := config.NewArtifactBucketFromMap(map[string]string{})
+	artifactPVC, _ := config.NewArtifactPVCFromMap(map[string]string{})
+	c := &config.Config{
+		Defaults:       defaults,
+		FeatureFlags:   featureFlags,
+		ArtifactBucket: artifactBucket,
+		ArtifactPVC:    artifactPVC,
+	}
+	return config.ToContext(ctx, c)
+}
+
 func (c *Reconciler) reconcile(ctx context.Context, run *v1alpha1.Run, status *pipelineloopv1alpha1.PipelineLoopRunStatus) error {
+	ctx = EnableCustomTaskFeatureFlag(ctx)
 	logger := logging.FromContext(ctx)
 
 	// Get the PipelineLoop referenced by the Run
@@ -672,6 +693,11 @@ func getPipelineRunLabels(run *v1alpha1.Run, iterationStr string) map[string]str
 		prOriginalName = run.ObjectMeta.Labels["tekton.dev/pipelineRun"]
 	}
 	labels[pipelineloop.GroupName+originalPRKey] = prOriginalName
+	// Empty the RunId reference from the KFP persistent agent because LabelKeyWorkflowRunId should be unique across all pipelineruns
+	_, ok := labels[LabelKeyWorkflowRunId]
+	if ok {
+		delete(labels, LabelKeyWorkflowRunId)
+	}
 	return labels
 }
 
